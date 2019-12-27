@@ -3,8 +3,9 @@ package ru.mbstu
 import breeze.util.BloomFilter
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
+import ru.mbstu.misc.BloomAccumulatorV2
 
-object MrJoinWithBloom {
+object MrJoinBloomAccum {
   def main(args: Array[String]) {
     val spark = SparkSession
       .builder
@@ -13,30 +14,30 @@ object MrJoinWithBloom {
       .getOrCreate()
 
     val airportsRaw = spark.sparkContext.textFile("data/airports.csv")
-    val airports: RDD[(String, (String, String, String, String))] = airportsRaw.map(line => {
+    val bloomAcc = new BloomAccumulatorV2(BloomFilter.optimallySized[String](expectedNumItems = 10000, falsePositiveRate = 1 - 0.99))
+    spark.sparkContext.register(bloomAcc, "bloomAcc")
+    val airports = airportsRaw.map(line => {
       val tokens = line.split(",")
-      (tokens(3), ("R", tokens(0), tokens(1), tokens(2))) // Tagging Locations with R
+      val key = tokens(3)
+      bloomAcc.add(key)
+      (key, ("R", tokens(0), tokens(1), tokens(2))) // Tagging Locations with R
     })
 
-    val bf = airports.mapPartitions { iter =>
-      val bf = BloomFilter.optimallySized[String](10000, 1 - 0.99)
-      iter.foreach(i => bf += i._1)
-      Iterator(bf)
-    }.reduce(_ | _)
+    airports.foreach(_ => Unit)
 
     val flightDataRaw = spark.sparkContext.textFile("data/2008.csv")
     val flightData = flightDataRaw.flatMap(line => {
       val tokens = line.split(",")
       val key = tokens(16)
-      if (bf.contains(key))
-        Seq((key, ("L", tokens(14), "", "")))// Tagging Locations with L)
+      if (bloomAcc.value.contains(key))
+        Seq((key, ("L", tokens(14), "", ""))) // Tagging Locations with L)
       else
         Nil
     })
 
     // spark.createDataFrame(flightData).show()
     // MAGIC IS HERE
-    println("flightData.count=" + flightData.count()) // 76031
+    // println("flightData.count=" + flightData.count()) // 76031
 
     val all = flightData union airports
 
@@ -52,11 +53,11 @@ object MrJoinWithBloom {
         }
     }
 
-    //spark.createDataFrame(flightJoinAirports).show()
 
-    flightJoinAirports.coalesce(1).saveAsTextFile("target/join-mr-with-bloom") // Saves output to the file.
+    flightJoinAirports.coalesce(1).saveAsTextFile("target/join-mr-bloom-optim") // Saves output to the file.
 
     println("flightJoinAirports.count=" + flightJoinAirports.count())
+
     spark.stop()
   }
 }
