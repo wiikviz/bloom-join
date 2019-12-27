@@ -18,8 +18,9 @@ object MrJoinWithBloom {
       (tokens(3), ("R", tokens(0), tokens(1), tokens(2))) // Tagging Locations with R
     })
 
+    val airportCount = airports.count()
     val bf = airports.mapPartitions { iter =>
-      val bf = BloomFilter.optimallySized[String](10000, 0.001)
+      val bf = BloomFilter.optimallySized[String](airportCount, 1-0.99)
       iter.foreach(i => bf += i._1)
       Iterator(bf)
     }.reduce(_ | _)
